@@ -1,5 +1,5 @@
 {
-  "name": "my-turborepo",
+  "name": "dramisinfo",
   "private": true,
   "scripts": {
     "build": "turbo run build",
