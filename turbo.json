@@ -17,13 +17,13 @@
       "cache": false,
       "persistent": true
     },
-    "frontend": {
+    "frontend#build": {
       "dependsOn": [],
       "outputs": ["apps/frontend/.next/**"]
     },
-    "backend": {
+    "backend#build": {
       "dependsOn": [],
-      "outputs": ["apps/backend/dist/**"]
+      "outputs": ["dist/**"]
     },
     "test": {
       "dependsOn": ["^build"],
