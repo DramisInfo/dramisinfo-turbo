@@ -49,6 +49,22 @@ jobs:
         run: |
           npx turbo prune --docker --scope=${{ matrix.app }}
           mv out ./${{ matrix.app }}-out
+
+      - name: Build application
+        run: |
+          if [ "${{ matrix.app }}" == "backend" ]; then
+            npm run build --workspace=apps/backend
+          elif [ "${{ matrix.app }}" == "frontend" ]; then
+            npm run build --workspace=apps/frontend
+          fi
+
+      - name: Prepare Docker context
+        run: |
+          if [ "${{ matrix.app }}" == "backend" ]; then
+            cp -r apps/backend/dist ./${{ matrix.app }}-out/dist
+          elif [ "${{ matrix.app }}" == "frontend" ]; then
+            cp -r apps/frontend/.next ./${{ matrix.app }}-out/.next
+          fi
  
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -6,19 +6,19 @@ WORKDIR /app
 # Copy only the pruned package.json files and install dependencies
 COPY json/ .
 COPY package-lock.json ./package-lock.json
-RUN npm install
-
-# Copy source code and build
-COPY full/ .
-RUN npm run build
+RUN npm ci
 
 # Final stage: Production image
 FROM node:18-alpine AS runner
 WORKDIR /app
 # Install production dependencies
 COPY --from=installer /app/apps/backend/package.json ./package.json
-COPY --from=installer /app/apps/backend/dist ./dist
-RUN npm install --omit=dev
+COPY dist/ ./dist
+RUN npm ci --omit=dev
+
+# Check if pre-built dist exists, otherwise build
+COPY dist/ ./dist
+RUN if [ ! -d "./dist" ]; then npm run build; fi
 
 # Create and switch to non-root user
 RUN addgroup --system --gid 1001 nodejs \
