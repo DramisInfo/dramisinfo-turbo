@@ -6,68 +6,34 @@ on:
   pull_request:
     branches: [ main ]
 
-env:
-  REGISTRY: ghcr.io
-  ORGANIZATION: dramisinfo
-
 jobs:
-  ci:
+  build:
+    name: Build and Test
+    timeout-minutes: 15
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    
+    # To use Remote Caching, uncomment the next lines and follow the steps below.
+    # env:
+    #  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+    #  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+    #  TURBO_REMOTE_ONLY: true
+ 
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'npm'
-
-    - name: Install dependencies
-      run: npm ci
-      
-    - name: Install Task
-      uses: arduino/setup-task@v1
-      
-    - name: Install k3d
-      run: wget -q -O - https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
-
-    - name: Install Helm
-      uses: azure/setup-helm@v3
-
-    - name: Generate short SHA
-      id: prep
-      run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
-
-    - name: Run CI Pipeline
-      run: task ci
-
-    - name: Login to GitHub Container Registry
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Push images to GitHub Packages
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      run: |
-        # Tag and push frontend
-        docker tag frontend:latest ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:${{ steps.prep.outputs.sha_short }}
-        docker tag frontend:latest ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:latest
-        docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:${{ steps.prep.outputs.sha_short }}
-        docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:latest
-        
-        # Tag and push backend
-        docker tag backend:latest ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:${{ steps.prep.outputs.sha_short }}
-        docker tag backend:latest ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:latest
-        docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:${{ steps.prep.outputs.sha_short }}
-        docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:latest
-
-    - name: Cleanup k3d cluster
-      if: always()
-      run: k3d cluster delete dramisinfo-cluster
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+ 
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+ 
+      - name: Install dependencies
+        run: npm install
+ 
+      - name: Build
+        run: npm run build
+ 
+      - name: Test
+        run: npm run test
