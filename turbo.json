@@ -24,6 +24,10 @@
     "backend": {
       "dependsOn": [],
       "outputs": ["apps/backend/dist/**"]
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**/*.tsx", "src/**/*.ts", "test/**/*.ts", "test/**/*.tsx"]
     }
   }
 }
