@@ -11,68 +11,140 @@ env:
   ORGANIZATION: dramisinfo
 
 jobs:
-  ci:
+  code-quality:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    
     steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'npm'
-
-    - name: Install dependencies
-      run: npm ci
+      - uses: actions/checkout@v4
       
-    - name: Install Task
-      uses: arduino/setup-task@v1
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
       
-    - name: Install k3d
-      run: |
-        wget -q -O - https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
-
-    - name: Install Helm
-      uses: azure/setup-helm@v3
-
-    - name: Extract metadata for Docker
-      id: meta
-      run: |
-        echo "SHA_SHORT=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_ENV
-
-    # First run the CI pipeline with k3d registry for testing
-    - name: Run CI Pipeline with local registry
-      run: task ci
-
-    # After successful testing, login to GitHub Packages
-    - name: Log in to GitHub Container Registry
-      if: success()
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    # Push images to GitHub Packages after successful testing
-    - name: Tag and push images to GitHub Packages
-      if: success()
-      run: |
-        # Tag and push frontend
-        docker tag frontend:latest ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:${{ env.SHA_SHORT }}
-        docker tag frontend:latest ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:latest
-        docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:${{ env.SHA_SHORT }}
-        docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:latest
-        
-        # Tag and push backend
-        docker tag backend:latest ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:${{ env.SHA_SHORT }}
-        docker tag backend:latest ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:latest
-        docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:${{ env.SHA_SHORT }}
-        docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:latest
+      - name: Install dependencies
+        run: npm ci
       
-    - name: Cleanup k3d cluster
-      if: always()
-      run: task delete-cluster
+      - name: Lint and Type Check
+        run: npx turbo run lint check-types --parallel
+
+  build-images:
+    runs-on: ubuntu-latest
+    needs: code-quality
+    outputs:
+      sha_short: ${{ steps.prep.outputs.sha_short }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Prepare variables
+        id: prep
+        run: echo "sha_short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+      
+      - name: Build Frontend Image
+        run: docker build -f apps/frontend/Dockerfile -t frontend:latest -t frontend:${{ steps.prep.outputs.sha_short }} .
+      
+      - name: Build Backend Image
+        run: docker build -f apps/backend/Dockerfile -t backend:latest -t backend:${{ steps.prep.outputs.sha_short }} .
+      
+      - name: Export Images
+        run: |
+          mkdir -p /tmp/images
+          docker save frontend:latest frontend:${{ steps.prep.outputs.sha_short }} > /tmp/images/frontend.tar
+          docker save backend:latest backend:${{ steps.prep.outputs.sha_short }} > /tmp/images/backend.tar
+      
+      - name: Upload Images
+        uses: actions/upload-artifact@v3
+        with:
+          name: docker-images
+          path: /tmp/images
+          retention-days: 1
+
+  test-deployment:
+    runs-on: ubuntu-latest
+    needs: build-images
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install k3d
+        run: wget -q -O - https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+      
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+      
+      - name: Download Images
+        uses: actions/download-artifact@v3
+        with:
+          name: docker-images
+          path: /tmp/images
+      
+      - name: Load Images
+        run: |
+          docker load < /tmp/images/frontend.tar
+          docker load < /tmp/images/backend.tar
+      
+      - name: Create k3d Cluster
+        run: |
+          k3d cluster create dramisinfo-cluster --servers 1 --agents 2 --registry-create registry.localhost:5000
+          docker tag frontend:latest registry.localhost:5000/frontend:latest
+          docker push registry.localhost:5000/frontend:latest
+          docker tag backend:latest registry.localhost:5000/backend:latest
+          docker push registry.localhost:5000/backend:latest
+          k3d image import registry.localhost:5000/frontend:latest registry.localhost:5000/backend:latest -c dramisinfo-cluster
+      
+      - name: Deploy and Test
+        run: |
+          helm package dramisinfo-chart
+          helm install dramisinfo ./dramisinfo-chart
+          # Wait for pods to be ready
+          kubectl wait --for=condition=ready pod -l app=frontend --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=backend --timeout=120s
+          # Validate deployment
+          if ! helm list | grep -q dramisinfo; then
+            echo "Helm deployment failed"
+            kubectl get pods --all-namespaces
+            exit 1
+          fi
+      
+      - name: Cleanup k3d cluster
+        if: always()
+        run: k3d cluster delete dramisinfo-cluster
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [test-deployment, build-images]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Download Images
+        uses: actions/download-artifact@v3
+        with:
+          name: docker-images
+          path: /tmp/images
+      
+      - name: Load Images
+        run: |
+          docker load < /tmp/images/frontend.tar
+          docker load < /tmp/images/backend.tar
+      
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Tag and Push Images
+        run: |
+          # Tag and push frontend
+          docker tag frontend:${{ needs.build-images.outputs.sha_short }} ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:${{ needs.build-images.outputs.sha_short }}
+          docker tag frontend:latest ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:latest
+          docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:${{ needs.build-images.outputs.sha_short }}
+          docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/frontend:latest
+          
+          # Tag and push backend
+          docker tag backend:${{ needs.build-images.outputs.sha_short }} ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:${{ needs.build-images.outputs.sha_short }}
+          docker tag backend:latest ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:latest
+          docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:${{ needs.build-images.outputs.sha_short }}
+          docker push ${{ env.REGISTRY }}/${{ env.ORGANIZATION }}/backend:latest
