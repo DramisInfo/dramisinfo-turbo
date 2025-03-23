@@ -7,10 +7,23 @@ on:
     branches: [ main ]
 
 jobs:
+  get-apps:
+    runs-on: ubuntu-latest
+    outputs:
+      apps: ${{ steps.set-apps.outputs.apps }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: set-apps
+        run: echo "apps=$(ls apps | jq -R -s -c 'split("\n")[:-1]')" >> $GITHUB_OUTPUT
+
   build:
+    needs: get-apps
     name: Build and Test
     timeout-minutes: 15
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: ${{ fromJson(needs.get-apps.outputs.apps) }}
     # To use Remote Caching, uncomment the next lines and follow the steps below.
     # env:
     #  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
@@ -31,9 +44,20 @@ jobs:
  
       - name: Install dependencies
         run: npm install
+
+      - name: Turbo Prune
+        run: |
+          npx turbo prune --docker --scope=${{ matrix.app }}
+          mv out ./${{ matrix.app }}-out
  
       - name: Build
         run: npm run build
  
       - name: Test
         run: npm run test
+
+      - name: Upload pruned output
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-out
+          path: ./${{ matrix.app }}-out
