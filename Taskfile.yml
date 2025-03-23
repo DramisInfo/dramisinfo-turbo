@@ -1,0 +1,100 @@
+version: '3'
+tasks:
+  create-cluster:
+    desc: Create a local k3d cluster with a registry
+    cmds:
+      - |
+        if k3d cluster list | grep -q dramisinfo-cluster; then
+          k3d cluster delete dramisinfo-cluster;
+        fi
+      - k3d cluster create dramisinfo-cluster --servers 1 --agents 2 --registry-create registry.localhost:5000
+
+  delete-cluster:
+    desc: Delete the local k3d cluster
+    cmds:
+      - k3d cluster delete dramisinfo-cluster
+
+  build-frontend-image:
+    desc: Build Docker image for frontend
+    cmds:
+      - docker build -f apps/frontend/Dockerfile -t frontend:latest .
+
+  build-backend-image:
+    desc: Build Docker image for backend
+    cmds:
+      - docker build -f apps/backend/Dockerfile -t backend:latest .
+
+  push-images:
+    desc: Push Docker images to the local k3d registry
+    cmds:
+      - docker tag frontend:latest registry.localhost:5000/frontend:latest
+      - docker push registry.localhost:5000/frontend:latest
+      - docker tag backend:latest registry.localhost:5000/backend:latest
+      - docker push registry.localhost:5000/backend:latest
+
+  load-images:
+    desc: Load Docker images into the k3d cluster
+    cmds:
+      - k3d image import registry.localhost:5000/frontend:latest registry.localhost:5000/backend:latest -c dramisinfo-cluster
+
+  lint:
+    desc: Lint the codebase
+    cmds:
+      - npx turbo run lint
+
+  check-types:
+    desc: Check TypeScript types
+    cmds:
+      - npx turbo run check-types
+
+  package-helm:
+    desc: Package the Helm chart
+    cmds:
+      - helm package dramisinfo-chart
+
+  deploy-helm:
+    desc: Deploy the Helm chart to the k3d cluster
+    cmds:
+      - helm install dramisinfo ./dramisinfo-chart
+
+  validate-helm:
+    desc: Validate if Helm is successfully deployed
+    cmds:
+      - |
+        if ! helm list | grep -q dramisinfo; then
+          echo "Helm deployment failed. Fetching error logs..."
+          kubectl get pods --all-namespaces
+          kubectl describe pod $(kubectl get pods --namespace default -o jsonpath="{.items[0].metadata.name}") --namespace default
+          kubectl logs $(kubectl get pods --namespace default -o jsonpath="{.items[0].metadata.name}") --namespace default
+          exit 1
+        else
+          echo "Helm deployment successful! dramisinfo is deployed."
+        fi
+
+  get-error-logs:
+    desc: Retrieve error logs from Kubernetes pods
+    cmds:
+      - kubectl get pods --all-namespaces
+      - |
+        POD_NAME=$(kubectl get pods --namespace {{.namespace | default "default"}} -l "app={{.app}}" -o jsonpath="{.items[0].metadata.name}")
+        kubectl describe pod ${POD_NAME} --namespace {{.namespace | default "default"}}
+        kubectl logs ${POD_NAME} --namespace {{.namespace | default "default"}}
+
+  ci:
+    desc: Build, test, and deploy the project optimized for speed
+    cmds:
+      - task: lint-and-types
+      - task: build-frontend-image
+      - task: build-backend-image
+      - task: create-cluster
+      - task: push-images
+      - task: load-images
+      - task: package-helm
+      - task: deploy-helm
+      - task: validate-helm
+
+  lint-and-types:
+    desc: Run lint and type checking in parallel
+    cmds:
+      - |
+        npx turbo run lint check-types --parallel
