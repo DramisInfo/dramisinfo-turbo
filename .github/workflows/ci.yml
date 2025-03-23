@@ -46,17 +46,16 @@ jobs:
       - name: Build Backend Image
         run: docker build -f apps/backend/Dockerfile -t backend:latest -t backend:${{ steps.prep.outputs.sha_short }} .
       
-      - name: Export Images
+      - name: Save Docker images
         run: |
-          mkdir -p /tmp/images
-          docker save frontend:latest frontend:${{ steps.prep.outputs.sha_short }} > /tmp/images/frontend.tar
-          docker save backend:latest backend:${{ steps.prep.outputs.sha_short }} > /tmp/images/backend.tar
+          mkdir -p images
+          docker save frontend:latest frontend:${{ steps.prep.outputs.sha_short }} > images/frontend.tar
+          docker save backend:latest backend:${{ steps.prep.outputs.sha_short }} > images/backend.tar
       
-      - name: Upload Images
-        uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: docker-images
-          path: /tmp/images
+          path: images/*.tar
           retention-days: 1
 
   test-deployment:
@@ -71,16 +70,15 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v3
       
-      - name: Download Images
-        uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: docker-images
-          path: /tmp/images
+          path: images
       
       - name: Load Images
         run: |
-          docker load < /tmp/images/frontend.tar
-          docker load < /tmp/images/backend.tar
+          docker load < images/frontend.tar
+          docker load < images/backend.tar
       
       - name: Create k3d Cluster
         run: |
@@ -117,16 +115,15 @@ jobs:
       packages: write
       contents: read
     steps:
-      - name: Download Images
-        uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: docker-images
-          path: /tmp/images
+          path: images
       
       - name: Load Images
         run: |
-          docker load < /tmp/images/frontend.tar
-          docker load < /tmp/images/backend.tar
+          docker load < images/frontend.tar
+          docker load < images/backend.tar
       
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
